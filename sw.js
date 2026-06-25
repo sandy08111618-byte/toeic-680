@@ -1,4 +1,4 @@
-const CACHE = 'toeic-v4';
+const CACHE = 'toeic-v5';
 const ASSETS = [
   './index.html',
   './css/style.css',

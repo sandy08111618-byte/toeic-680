@@ -1185,6 +1185,84 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   color: var(--orange);
 }
 
+/* ── Learning page sections ─────────────────── */
+.learn-section-card {
+  margin-bottom: 12px;
+}
+.learn-section-title {
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--black);
+  margin-bottom: 6px;
+}
+.learn-section-count {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--black);
+}
+
+/* ── Done screen label ───────────────────────── */
+.done-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-bottom: 8px;
+}
+
+/* ── Check-in redesign ───────────────────────── */
+.progress-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.progress-row-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.progress-row-val {
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+.streak-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+.streak-item {
+  text-align: center;
+  padding: 14px 8px;
+  background: var(--gray);
+  border: var(--bdr-sm);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+.streak-num {
+  font-size: 36px;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--black);
+}
+.streak-label {
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 4px;
+  color: var(--black);
+}
+.streak-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 /* ── Firebase Sync UI ───────────────────────── */
 .sync-code-row {
   display: flex;

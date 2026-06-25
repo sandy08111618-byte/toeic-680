@@ -81,6 +81,7 @@
         checkins:    JSON.parse(localStorage.getItem('toeic_checkins') || '[]'),
         logs:        JSON.parse(localStorage.getItem('toeic_logs')     || '[]'),
         goal:        JSON.parse(localStorage.getItem('toeic_goal')     || '10'),
+        activity:    JSON.parse(localStorage.getItem('toeic_activity') || '{}'),
         lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
       };
       await docRef(code).set(payload);
@@ -111,6 +112,7 @@
       if (data.checkins)           localStorage.setItem('toeic_checkins', JSON.stringify(data.checkins));
       if (data.logs)               localStorage.setItem('toeic_logs',     JSON.stringify(data.logs));
       if (data.goal !== undefined) localStorage.setItem('toeic_goal',     JSON.stringify(data.goal));
+      if (data.activity)           localStorage.setItem('toeic_activity', JSON.stringify(data.activity));
       localStorage.setItem(LAST_SYNC_KEY, new Date().toISOString());
       console.log('[Sync] ↓ 下載成功，共', data.words?.length, '個單字');
       return data;

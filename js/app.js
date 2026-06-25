@@ -6,6 +6,9 @@
 const POS_LABELS  = { noun:'名詞', verb:'動詞', adj:'形容詞', adv:'副詞', other:'其他' };
 const STATUS_LABELS = { new:'未熟', learning:'學習中', mastered:'精熟' };
 
+// 間隔複習天數：第1次→1天後，第2次→3天後，第3次→7天後...
+const SRS_INTERVALS = [1, 3, 7, 14, 30];
+
 // ── Utilities ──────────────────────────────────────
 function genId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7); }
 function today()  { return new Date().toISOString().slice(0, 10); }
@@ -97,6 +100,49 @@ const DB = {
     DB._saveLogs(logs.filter(l => l.date >= cutStr));
   },
   _saveLogs(l){ localStorage.setItem('toeic_logs', JSON.stringify(l)); if (window.FirebaseSync) FirebaseSync.scheduleSync(); },
+
+  // ── Spaced Repetition (SRS) ────────────────────────
+  getDueWords() {
+    const t = today();
+    return DB.getWords().filter(w => w.nextReviewDate && w.nextReviewDate <= t);
+  },
+
+  recordReview(id, success) {
+    const words = DB.getWords();
+    const i = words.findIndex(w => w.id === id);
+    if (i < 0) return null;
+    const now = today();
+    const oldCount = words[i].reviewCount || 0;
+    const count = success ? oldCount + 1 : Math.max(0, oldCount - 1);
+    const intervalDays = success
+      ? SRS_INTERVALS[Math.min(count - 1, SRS_INTERVALS.length - 1)]
+      : 1; // 答錯：明天再複習
+    const nextDate = new Date(now + 'T00:00:00');
+    nextDate.setDate(nextDate.getDate() + intervalDays);
+    Object.assign(words[i], {
+      reviewCount:    count,
+      nextReviewDate: nextDate.toISOString().slice(0, 10),
+      lastReviewedAt: now,
+      status: count >= SRS_INTERVALS.length ? 'mastered' : count > 0 ? 'learning' : 'new',
+    });
+    DB.saveWords(words);
+    return words[i];
+  },
+
+  // ── Daily activity log (自動紀錄，不需手動打卡) ────
+  getActivity() { return JSON.parse(localStorage.getItem('toeic_activity') || '{}'); },
+  logActivity(type) { // type: 'new' | 'review'
+    const t = today();
+    const act = DB.getActivity();
+    if (!act[t]) act[t] = { new: 0, review: 0 };
+    act[t][type]++;
+    localStorage.setItem('toeic_activity', JSON.stringify(act));
+    if (window.FirebaseSync) FirebaseSync.scheduleSync();
+  },
+
+  // ── Daily goal ──────────────────────────────────────
+  getGoal()  { return parseInt(localStorage.getItem('toeic_goal') || '10'); },
+  saveGoal(n){ localStorage.setItem('toeic_goal', String(n)); if (window.FirebaseSync) FirebaseSync.scheduleSync(); },
 };
 
 // ── Router ─────────────────────────────────────────
@@ -161,22 +207,22 @@ function renderLearning(app) {
 function renderLearningIdle(view) {
   view.innerHTML = '';
   const todayWords = DB.getTodayWords();
+  const dueWords   = DB.getDueWords();
   const prevSession = DB.getSession();
 
   const header = el('div', 'page-header');
   header.innerHTML = `<h1>今日學習</h1><span class="text-muted">${formatDateFull(today())}</span>`;
   view.appendChild(header);
 
-  // If there's a saved session for today, offer to continue
+  // 未完成的學習 session
   if (prevSession && prevSession.phase !== 'DONE') {
     const contCard = el('div', 'card');
     contCard.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <span style="font-size:24px">⏸️</span>
-        <div><div style="font-weight:600">有未完成的練習</div>
-        <div class="text-muted">繼續上次的學習進度</div></div>
+      <div style="margin-bottom:12px">
+        <div style="font-weight:700;margin-bottom:4px">有未完成的練習</div>
+        <div class="text-muted">繼續上次的學習進度</div>
       </div>`;
-    const row = el('div', 'flex-row', '');
+    const row = el('div', 'flex-row');
     const btnCont = el('button', 'btn btn-primary', '繼續練習');
     const btnNew  = el('button', 'btn btn-ghost',   '重新開始');
     btnCont.onclick = () => { _session = prevSession; dispatchPhase(view, _session.phase); };
@@ -187,38 +233,62 @@ function renderLearningIdle(view) {
     return;
   }
 
-  if (todayWords.length === 0) {
-    const empty = el('div', 'empty-state');
-    empty.innerHTML = `
-      <div class="empty-icon">📝</div>
-      <p>今天還沒有新增單字<br>先到「單字庫」新增今天要練習的單字吧！</p>`;
-    const btn = el('button', 'btn btn-primary', '前往單字庫');
-    btn.onclick = () => showTab('vocab');
-    empty.appendChild(btn);
-    view.appendChild(empty);
-    return;
+  const hasNew = todayWords.length > 0;
+  const hasDue = dueWords.length > 0;
+
+  // 今日新單字 卡片
+  const newCard = el('div', 'card learn-section-card');
+  const newTitle = el('div', 'learn-section-title', '今日新單字');
+  const newDesc = el('div', 'learn-section-count');
+
+  if (hasNew) {
+    newDesc.textContent = `${todayWords.length} 個單字等待學習`;
+    const btnNew = el('button', 'btn btn-primary', '開始學習');
+    btnNew.onclick = () => startSession(view, todayWords);
+
+    const list = el('ul', 'word-preview-list');
+    todayWords.slice(0, 5).forEach(w => {
+      const li = el('li', 'word-preview-item');
+      li.innerHTML = `<span class="badge badge-${w.pos}">${POS_LABELS[w.pos] || w.pos}</span>
+        <span class="word-en">${w.word}</span><span class="word-zh">${w.meaning}</span>`;
+      list.appendChild(li);
+    });
+    if (todayWords.length > 5) {
+      const more = el('li', 'word-preview-item text-muted');
+      more.textContent = `…還有 ${todayWords.length - 5} 個`;
+      list.appendChild(more);
+    }
+    newCard.append(newTitle, newDesc, list, btnNew);
+  } else {
+    newDesc.textContent = '今天還沒有新增單字';
+    newDesc.className = 'learn-section-count text-muted';
+    const btnGo = el('button', 'btn btn-ghost', '前往單字庫新增');
+    btnGo.onclick = () => showTab('vocab');
+    newCard.append(newTitle, newDesc, btnGo);
   }
+  view.appendChild(newCard);
 
-  // Show today's words
-  const card = el('div', 'card session-idle');
-  card.innerHTML = `<div class="section-title">今日練習單字（${todayWords.length} 個）</div>`;
+  // 今日到期複習 卡片
+  const dueCard = el('div', 'card learn-section-card');
+  const dueTitle = el('div', 'learn-section-title', '今日到期複習');
+  const dueDesc = el('div', 'learn-section-count');
 
-  const list = el('ul', 'word-preview-list');
-  todayWords.forEach(w => {
-    const li = el('li', 'word-preview-item');
-    li.innerHTML = `
-      <span class="badge badge-${w.pos}">${POS_LABELS[w.pos] || w.pos}</span>
-      <span class="word-en">${w.word}</span>
-      <span class="word-zh">${w.meaning}</span>`;
-    list.appendChild(li);
-  });
-  card.appendChild(list);
-
-  const btn = el('button', 'btn btn-primary btn-full', '開始今日練習 ▶');
-  btn.style.marginTop = '14px';
-  btn.onclick = () => startSession(view, todayWords);
-  card.appendChild(btn);
-  view.appendChild(card);
+  if (hasDue) {
+    dueDesc.textContent = `${dueWords.length} 個單字需要複習`;
+    const btnReview = el('button', 'btn btn-primary', '開始複習');
+    btnReview.onclick = () => startReviewSession(view, dueWords);
+    dueCard.append(dueTitle, dueDesc, btnReview);
+  } else {
+    dueDesc.textContent = '今天沒有到期的複習';
+    dueDesc.className = 'learn-section-count text-muted';
+    const note = el('div', 'text-muted');
+    note.style.fontSize = '12px';
+    note.textContent = DB.getWords().filter(w => w.nextReviewDate).length > 0
+      ? '很好，繼續保持！'
+      : '完成新單字學習後，複習計畫會自動安排';
+    dueCard.append(dueTitle, dueDesc, note);
+  }
+  view.appendChild(dueCard);
 }
 
 function startSession(view, words) {
@@ -339,7 +409,7 @@ function renderSpelling(view, word, isRemedial) {
   view.appendChild(pWrap);
 
   // Phase label
-  const phase = el('div', 'text-muted', isRemedial ? `🔄 補救複習  ${idx+1} / ${total}` : `✏️ 拼字練習  ${idx+1} / ${total}`);
+  const phase = el('div', 'text-muted', isRemedial ? `補救複習  ${idx+1} / ${total}` : `拼字練習  ${idx+1} / ${total}`);
   phase.style.cssText = 'text-align:center;padding:8px 0;font-size:13px';
   view.appendChild(phase);
 
@@ -553,27 +623,194 @@ function renderDone(view) {
   const failed  = sessionWords.filter(w => _session.results[w.id]?.spelling === 'failed').length;
   const pct = total ? Math.round((correct / total) * 100) : 0;
 
+  // 記錄 SRS 複習狀態（完成 word search 表示已確實學習）
+  _session.words.forEach(id => {
+    const r = _session.results[id];
+    DB.recordReview(id, r?.spelling === 'correct'); // 拼對才算成功
+  });
+  DB.logActivity('new');
+  DB.clearSession();
+  _session = null;
+
   view.innerHTML = '';
   const done = el('div', 'done-screen');
   done.innerHTML = `
-    <div class="done-icon">${pct === 100 ? '🏆' : pct >= 60 ? '🎉' : '💪'}</div>
-    <h2>今日練習完成！</h2>
-    <p class="subtitle">繼續加油，多益 680 指日可待！</p>
+    <div class="done-label">${pct === 100 ? '全對！' : pct >= 60 ? '完成' : '繼續加油'}</div>
+    <h2>今日練習完成</h2>
+    <p class="subtitle">下次複習時間已自動安排好</p>
     <div class="done-stats">
       <div class="done-stat-item"><div class="stat-val">${total}</div><div class="stat-key">今日單字</div></div>
       <div class="done-stat-item"><div class="stat-val">${correct}</div><div class="stat-key">拼字正確</div></div>
-      <div class="done-stat-item"><div class="stat-val">${failed}</div><div class="stat-key">需再加強</div></div>
+      <div class="done-stat-item"><div class="stat-val">${failed}</div><div class="stat-key">需加強</div></div>
       <div class="done-stat-item"><div class="stat-val">${pct}%</div><div class="stat-key">正確率</div></div>
     </div>`;
 
   const btnNew = el('button', 'btn btn-primary btn-full', '繼續新增單字');
-  btnNew.onclick = () => { DB.clearSession(); _session = null; showTab('vocab'); };
+  btnNew.onclick = () => showTab('vocab');
   done.appendChild(btnNew);
 
-  const btnRe = el('button', 'btn btn-ghost btn-full', '查看今日成果');
+  const btnRe = el('button', 'btn btn-ghost btn-full', '查看學習統計');
   btnRe.style.marginTop = '8px';
   btnRe.onclick = () => showTab('stats');
   done.appendChild(btnRe);
+
+  view.appendChild(done);
+}
+
+// ══════════════════════════════════════════════════════════
+//  REVIEW SESSION  (間隔複習，僅拼字，不含 word search)
+// ══════════════════════════════════════════════════════════
+
+let _reviewSession = null;
+
+function startReviewSession(view, dueWords) {
+  _reviewSession = {
+    date:       today(),
+    words:      dueWords.map(w => w.id),
+    currentIdx: 0,
+    results:    {}, // id → 'correct' | 'failed'
+  };
+  renderReviewSpelling(view);
+}
+
+function renderReviewSpelling(view) {
+  if (!_reviewSession || _reviewSession.currentIdx >= _reviewSession.words.length) {
+    renderReviewDone(view);
+    return;
+  }
+
+  const allWords = DB.getWords();
+  const id   = _reviewSession.words[_reviewSession.currentIdx];
+  const word = allWords.find(w => w.id === id);
+  if (!word) { _reviewSession.currentIdx++; renderReviewSpelling(view); return; }
+
+  const total = _reviewSession.words.length;
+  const idx   = _reviewSession.currentIdx;
+
+  view.innerHTML = '';
+
+  // 進度條
+  const pWrap = el('div', 'progress-bar-wrap');
+  const pFill = el('div', 'progress-bar-fill');
+  pFill.style.width = `${(idx / total) * 100}%`;
+  pWrap.appendChild(pFill);
+  view.appendChild(pWrap);
+
+  const phaseLabel = el('div', 'text-muted', `複習  ${idx + 1} / ${total}`);
+  phaseLabel.style.cssText = 'text-align:center;padding:8px 0;font-size:13px';
+  view.appendChild(phaseLabel);
+
+  // 單字提示卡
+  const prompt = el('div', 'word-prompt');
+  prompt.innerHTML = `
+    <div class="pos-label">${POS_LABELS[word.pos] || word.pos}</div>
+    <div class="meaning">${word.meaning}</div>
+    ${word.example ? `<div class="example">${_maskWord(word.example, word.word)}</div>` : ''}`;
+  view.appendChild(prompt);
+
+  const hintDisp = el('div', 'hint-display');
+  hintDisp.style.display = 'none';
+  view.appendChild(hintDisp);
+
+  const inputWrap = el('div', 'spelling-input-wrap');
+  const input = el('input', 'spelling-input');
+  input.type = 'text';
+  input.autocomplete = 'off';
+  input.autocorrect = 'off';
+  input.autocapitalize = 'none';
+  input.spellcheck = false;
+  input.placeholder = '拼出英文單字…';
+  inputWrap.appendChild(input);
+  view.appendChild(inputWrap);
+
+  const actions = el('div', 'spelling-actions');
+  const btnCheck  = el('button', 'btn btn-primary', '確認');
+  const btnGiveup = el('button', 'btn btn-gray', '看答案');
+  btnGiveup.style.gridColumn = '1 / -1';
+  actions.append(btnCheck, btnGiveup);
+  view.appendChild(actions);
+
+  let answered = false;
+  const advance = () => { _reviewSession.currentIdx++; renderReviewSpelling(view); };
+
+  const doCheck = () => {
+    if (answered) return;
+    const val = input.value.trim().toLowerCase();
+    if (!val) return;
+    if (val === word.word.toLowerCase()) {
+      answered = true;
+      input.classList.add('correct');
+      input.value = word.word;
+      btnCheck.disabled = btnGiveup.disabled = true;
+      _reviewSession.results[id] = 'correct';
+      DB.addLog({ date: today(), wordId: id, type: 'spelling', result: 'correct' });
+      showToast('答對了');
+      setTimeout(advance, 900);
+    } else {
+      input.classList.add('wrong');
+      setTimeout(() => input.classList.remove('wrong'), 400);
+    }
+  };
+
+  btnCheck.onclick = doCheck;
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') doCheck(); });
+
+  btnGiveup.onclick = () => {
+    if (answered) return;
+    answered = true;
+    btnCheck.disabled = btnGiveup.disabled = true;
+    hintDisp.textContent = word.word;
+    hintDisp.style.display = '';
+    hintDisp.style.background = 'var(--warning-pale)';
+    hintDisp.style.color = 'var(--warning)';
+    _reviewSession.results[id] = 'failed';
+    DB.addLog({ date: today(), wordId: id, type: 'spelling', result: 'failed' });
+    const reveal = el('div', 'reveal-word');
+    reveal.innerHTML = `<div class="revealed">${word.word}</div>`;
+    view.appendChild(reveal);
+    const nextBtn = el('button', 'btn btn-gray btn-full', '下一個');
+    nextBtn.style.marginTop = '12px';
+    nextBtn.onclick = advance;
+    view.appendChild(nextBtn);
+  };
+
+  setTimeout(() => { try { input.focus(); } catch(_) {} }, 180);
+}
+
+function renderReviewDone(view) {
+  // 記錄 SRS 複習
+  if (_reviewSession) {
+    _reviewSession.words.forEach(id => {
+      DB.recordReview(id, _reviewSession.results[id] === 'correct');
+    });
+    DB.logActivity('review');
+  }
+
+  const total   = _reviewSession?.words.length || 0;
+  const correct = Object.values(_reviewSession?.results || {}).filter(r => r === 'correct').length;
+  _reviewSession = null;
+
+  view.innerHTML = '';
+  const done = el('div', 'done-screen');
+  done.innerHTML = `
+    <div class="done-label">複習完成</div>
+    <h2>今日複習結束</h2>
+    <p class="subtitle">複習結果已記錄，下次間隔已更新</p>
+    <div class="done-stats">
+      <div class="done-stat-item"><div class="stat-val">${total}</div><div class="stat-key">複習單字</div></div>
+      <div class="done-stat-item"><div class="stat-val">${correct}</div><div class="stat-key">答對</div></div>
+      <div class="done-stat-item"><div class="stat-val">${total - correct}</div><div class="stat-key">需加強</div></div>
+      <div class="done-stat-item"><div class="stat-val">${total ? Math.round(correct/total*100) : 0}%</div><div class="stat-key">正確率</div></div>
+    </div>`;
+
+  const btnHome = el('button', 'btn btn-primary btn-full', '回到學習首頁');
+  btnHome.onclick = () => showTab('learning', true);
+  done.appendChild(btnHome);
+
+  const btnStats = el('button', 'btn btn-ghost btn-full', '查看學習統計');
+  btnStats.style.marginTop = '8px';
+  btnStats.onclick = () => showTab('stats');
+  done.appendChild(btnStats);
 
   view.appendChild(done);
 }
@@ -881,7 +1118,7 @@ function openWordModal({ mode, prefill, wordId, onSave }) {
     if (!word || !meaning) { showToast('請填寫英文單字和中文意思'); return; }
 
     if (mode === 'add') {
-      DB.addWord({ id: genId(), word, pos: selectedPos, meaning, example: exInput.value.trim(), status: 'new', addedAt: today(), lastReviewedAt: null });
+      DB.addWord({ id: genId(), word, pos: selectedPos, meaning, example: exInput.value.trim(), status: 'new', addedAt: today(), lastReviewedAt: null, reviewCount: 0, nextReviewDate: null });
       showToast(`已新增「${word}」`);
     } else {
       DB.updateWord(wordId, { word, pos: selectedPos, meaning, example: exInput.value.trim() });
@@ -913,79 +1150,149 @@ function renderCheckin(app) {
   app.appendChild(view);
 
   const header = el('div', 'page-header');
-  header.innerHTML = '<h1>每日打卡</h1>';
+  header.innerHTML = `<h1>學習打卡</h1><span class="text-muted">${formatDateFull(today())}</span>`;
   view.appendChild(header);
 
-  // Streak card
-  const streak = calcStreak();
-  const streakCard = el('div', 'checkin-streak');
-  streakCard.innerHTML = `
-    <div class="streak-num">${streak}</div>
-    <div class="streak-label">連續打卡天數 🔥</div>`;
+  const goal     = DB.getGoal();
+  const activity = DB.getActivity();
+  const todayAct = activity[today()] || { new: 0, review: 0 };
+  const todayNewCount = DB.getWords().filter(w => w.addedAt === today()).length;
+  const dueTodayCount = DB.getDueWords().length; // 今日到期的複習數
+
+  // ── 今日進度 ────────────────────────────────────────
+  const progCard = el('div', 'card');
+  progCard.appendChild(el('div', 'section-title', '今日進度'));
+
+  // 新單字進度條
+  const newPct = Math.min(100, Math.round(todayNewCount / goal * 100));
+  const newRow = el('div', 'progress-row');
+  newRow.innerHTML = `
+    <div class="progress-row-label">新增單字</div>
+    <div class="progress-row-bar">
+      <div class="progress-bar-wrap" style="margin:0">
+        <div class="progress-bar-fill" style="width:${newPct}%;background:var(--blue)"></div>
+      </div>
+    </div>
+    <div class="progress-row-val">${todayNewCount} / ${goal}</div>`;
+  progCard.appendChild(newRow);
+
+  // 複習進度
+  const reviewedToday = todayAct.review > 0;
+  const reviewRow = el('div', 'progress-row');
+  reviewRow.innerHTML = `
+    <div class="progress-row-label">到期複習</div>
+    <div class="progress-row-bar">
+      <div class="progress-bar-wrap" style="margin:0">
+        <div class="progress-bar-fill" style="width:${reviewedToday ? 100 : 0}%;background:var(--green)"></div>
+      </div>
+    </div>
+    <div class="progress-row-val">${reviewedToday ? '已完成' : dueTodayCount > 0 ? `${dueTodayCount} 個待複習` : '無'}</div>`;
+  progCard.appendChild(reviewRow);
+
+  // 每日目標設定
+  const goalRow = el('div');
+  goalRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--gray)';
+  goalRow.innerHTML = `<span class="text-muted" style="font-size:13px;flex:1">每日目標：<strong>${goal}</strong> 個新單字</span>`;
+  const btnGoal = el('button', 'btn btn-ghost', '調整');
+  btnGoal.style.cssText = 'padding:4px 12px;font-size:12px;flex-shrink:0';
+  btnGoal.onclick = () => openGoalModal(view);
+  goalRow.appendChild(btnGoal);
+  progCard.appendChild(goalRow);
+
+  view.appendChild(progCard);
+
+  // ── 連續天數 ────────────────────────────────────────
+  const reviewStreak = calcReviewStreak();
+  const goalStreak   = calcGoalStreak();
+
+  const streakCard = el('div', 'card');
+  streakCard.appendChild(el('div', 'section-title', '連續記錄'));
+  streakCard.innerHTML += `
+    <div class="streak-grid">
+      <div class="streak-item">
+        <div class="streak-num">${reviewStreak}</div>
+        <div class="streak-label">連續複習天數</div>
+        <div class="streak-sub">每天有學習或複習</div>
+      </div>
+      <div class="streak-item">
+        <div class="streak-num">${goalStreak}</div>
+        <div class="streak-label">達標天數</div>
+        <div class="streak-sub">新增 ≥ ${goal} 個單字</div>
+      </div>
+    </div>`;
   view.appendChild(streakCard);
+}
 
-  // Today's check-in form
-  const existing = DB.getTodayCheckin();
-  const formCard = el('div', 'checkin-form-card');
-  formCard.innerHTML = `<h3>${existing ? '今日已打卡 ✅' : '今日打卡'}</h3>`;
+// 每日目標調整 modal
+function openGoalModal(view) {
+  const overlay = el('div', 'modal-overlay');
+  const sheet   = el('div', 'modal-sheet');
+  sheet.innerHTML = '<div class="modal-handle"></div><div class="modal-title">調整每日目標</div>';
 
-  let minutes = existing?.minutes || 30;
+  const current = DB.getGoal();
+  let val = current;
 
-  // Minutes picker
-  const minWrap = el('div', 'minutes-input-wrap');
-  const btnMinus = el('button', 'minutes-btn', '−');
-  const minDisp  = el('div', 'minutes-display', `${minutes} 分鐘`);
-  const btnPlus  = el('button', 'minutes-btn', '+');
+  const counter = el('div', 'minutes-input-wrap');
+  const btnM = el('button', 'minutes-btn', '−');
+  const disp  = el('div', 'minutes-display', `${val} 個`);
+  const btnP  = el('button', 'minutes-btn', '+');
+  btnM.onclick = () => { val = Math.max(1, val - 1);  disp.textContent = `${val} 個`; };
+  btnP.onclick = () => { val = Math.min(50, val + 1); disp.textContent = `${val} 個`; };
+  counter.append(btnM, disp, btnP);
+  sheet.appendChild(counter);
 
-  btnMinus.onclick = () => { minutes = Math.max(5, minutes - 5); minDisp.textContent = `${minutes} 分鐘`; };
-  btnPlus.onclick  = () => { minutes = Math.min(480, minutes + 5); minDisp.textContent = `${minutes} 分鐘`; };
-  minWrap.append(btnMinus, minDisp, btnPlus);
-  formCard.appendChild(minWrap);
+  const note = el('div', 'backup-note', '設定每天要新增的單字目標數');
+  sheet.appendChild(note);
 
-  const noteInput = el('input', 'form-input');
-  noteInput.placeholder = '備註（今天讀了什麼？可選）';
-  noteInput.type = 'text';
-  noteInput.value = existing?.note || '';
-  noteInput.style.marginBottom = '12px';
-  formCard.appendChild(noteInput);
-
-  const btnSave = el('button', 'btn btn-primary btn-full', existing ? '更新打卡' : '打卡！');
+  const btnSave = el('button', 'btn btn-primary btn-full', '儲存');
+  btnSave.style.marginTop = '12px';
   btnSave.onclick = () => {
-    DB.addCheckin({ date: today(), minutes, note: noteInput.value.trim() });
-    showToast('✅ 打卡成功！');
+    DB.saveGoal(val);
+    overlay.remove();
     showTab('checkin', true);
   };
-  formCard.appendChild(btnSave);
-  view.appendChild(formCard);
+  sheet.appendChild(btnSave);
 
-  // Recent check-ins
-  const checkins = DB.getCheckins().slice(0, 7);
-  if (checkins.length > 0) {
-    const recentSec = el('div', 'recent-checkins');
-    recentSec.appendChild(el('h3', null, '最近打卡記錄'));
-    checkins.forEach(ci => {
-      const item = el('div', 'checkin-item');
-      item.innerHTML = `
-        <span class="ci-date">${formatDateShort(ci.date)}</span>
-        <span class="ci-min">${ci.minutes} 分</span>
-        <span class="ci-note">${ci.note || '—'}</span>`;
-      recentSec.appendChild(item);
-    });
-    view.appendChild(recentSec);
-  }
+  const btnCancel = el('button', 'btn btn-gray btn-full', '取消');
+  btnCancel.style.marginTop = '8px';
+  btnCancel.onclick = () => overlay.remove();
+  sheet.appendChild(btnCancel);
+
+  overlay.appendChild(sheet);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
 }
 
-function calcStreak() {
-  const checkins = DB.getCheckins().map(c => c.date).sort().reverse();
-  if (!checkins.length) return 0;
+// 連續複習天數（有 new 或 review activity 即算）
+function calcReviewStreak() {
+  const activity = DB.getActivity();
+  const checkFn = d => { const a = activity[d]; return !!(a && (a.new > 0 || a.review > 0)); };
   let streak = 0;
-  let cur = today();
-  for (const date of checkins) {
-    if (date === cur) { streak++; const d = new Date(cur + 'T00:00:00'); d.setDate(d.getDate() - 1); cur = d.toISOString().slice(0, 10); }
-    else if (date < cur) break;
+  for (let i = 1; i <= 365; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    if (checkFn(d.toISOString().slice(0, 10))) streak++; else break;
   }
+  if (checkFn(today())) streak++;
   return streak;
 }
+
+// 達標天數（當天新增單字 >= 目標）
+function calcGoalStreak() {
+  const goal = DB.getGoal();
+  const words = DB.getWords();
+  const byDay = {};
+  words.forEach(w => { if (w.addedAt) byDay[w.addedAt] = (byDay[w.addedAt] || 0) + 1; });
+  const checkFn = d => (byDay[d] || 0) >= goal;
+  let streak = 0;
+  for (let i = 1; i <= 365; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    if (checkFn(d.toISOString().slice(0, 10))) streak++; else break;
+  }
+  if (checkFn(today())) streak++;
+  return streak;
+}
+
+function calcStreak() { return calcReviewStreak(); } // 保留舊函數給 stats 用
 
 // ══════════════════════════════════════════════════════════
 //  STATS VIEW
@@ -1050,13 +1357,13 @@ function renderStats(app) {
 
   const backupCard = el('div', 'card');
 
-  const btnExport = el('button', 'btn btn-primary btn-full', '📤 匯出備份 JSON');
+  const btnExport = el('button', 'btn btn-primary btn-full', '匯出備份 JSON');
   btnExport.onclick = exportData;
   backupCard.appendChild(btnExport);
 
   const impRow = el('div');
   impRow.style.marginTop = '8px';
-  const btnImport = el('button', 'btn btn-ghost btn-full', '📥 匯入備份 JSON');
+  const btnImport = el('button', 'btn btn-ghost btn-full', '匯入備份 JSON');
   btnImport.onclick = () => {
     const fi = document.createElement('input');
     fi.type = 'file';
@@ -1075,7 +1382,7 @@ function renderStats(app) {
   // ── 雲端同步區塊 ─────────────────────────────────────
   if (window.FirebaseSync) {
     const sec6 = el('div', 'stats-section');
-    sec6.appendChild(el('h3', null, '☁️ 跨裝置同步'));
+    sec6.appendChild(el('h3', null, '跨裝置同步'));
     const syncCard = el('div', 'card');
 
     const syncCode = FirebaseSync.getOrCreateSyncCode();
@@ -1101,7 +1408,7 @@ function renderStats(app) {
     syncStatusEl.textContent = lastSync ? `✅ 上次同步：${lastSync}` : '⬜ 尚未同步至雲端';
 
     // 立即同步按鈕
-    const btnNow = el('button', 'btn btn-primary btn-full', '🔄 立即同步至雲端');
+    const btnNow = el('button', 'btn btn-primary btn-full', '立即同步至雲端');
     btnNow.style.marginTop = '12px';
     btnNow.onclick = async () => {
       btnNow.disabled = true;
@@ -1118,7 +1425,7 @@ function renderStats(app) {
     };
 
     // 換裝置按鈕
-    const btnSwitch = el('button', 'btn btn-ghost btn-full', '📱 輸入其他裝置的同步碼');
+    const btnSwitch = el('button', 'btn btn-ghost btn-full', '輸入其他裝置的同步碼');
     btnSwitch.style.marginTop = '8px';
     btnSwitch.onclick = openSyncCodeModal;
 
