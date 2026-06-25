@@ -62,7 +62,7 @@ html { height: 100%; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  background: var(--cream);
+  background: var(--black); /* 底部安全區域背景與導覽列同色，避免白條 */
   color: var(--black);
   height: 100%;
   overflow: hidden;
@@ -74,6 +74,8 @@ body {
   position: fixed;
   top: 0; left: 0; right: 0;
   bottom: calc(var(--nav-height) + var(--safe-bottom));
+  background: var(--cream); /* 內容區域維持米色 */
+  padding-top: env(safe-area-inset-top, 0px); /* 狀態列安全距離 */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
