@@ -189,16 +189,40 @@ class WordSearchGame {
     gridWrap.appendChild(grid);
     this.container.appendChild(gridWrap);
 
-    // Word list (combined mode only)
+    // Word list with spelling inputs (combined mode only)
     if (this.mode === 'combined') {
       this._wordListEl = document.createElement('div');
-      this._wordListEl.className = 'ws-found-list';
+      this._wordListEl.className = 'ws-found-list ws-found-list-combined';
       this.rawWords.forEach(w => {
+        const row = document.createElement('div');
+        row.className = 'ws-word-row';
+        row.id = `wfl-row-${w}`;
+
         const span = document.createElement('span');
         span.className = 'ws-found-item';
-        span.textContent = this.labels[w] || w;   // show Chinese meaning if available
+        span.textContent = this.labels[w] || w;
         span.id = `wfl-${w}`;
-        this._wordListEl.appendChild(span);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'ws-spell-input';
+        input.placeholder = '拼出英文…';
+        input.autocomplete = 'off';
+        input.autocorrect = 'off';
+        input.autocapitalize = 'none';
+        input.spellcheck = false;
+        input.setAttribute('aria-label', `拼出 ${this.labels[w] || w}`);
+
+        input.addEventListener('input', () => {
+          const val = input.value.trim().toUpperCase().replace(/[^A-Z]/g, '');
+          if (val === w) {
+            this._markWordFoundByTyping(w);
+          }
+        });
+
+        row.appendChild(span);
+        row.appendChild(input);
+        this._wordListEl.appendChild(row);
       });
       this.container.appendChild(this._wordListEl);
     }
@@ -337,6 +361,42 @@ class WordSearchGame {
   _markWordFound(word) {
     const el = document.getElementById(`wfl-${word}`);
     if (el) el.classList.add('found');
+    // Disable and fill the spelling input if found by dragging
+    const row = document.getElementById(`wfl-row-${word}`);
+    if (row) {
+      const input = row.querySelector('.ws-spell-input');
+      if (input && !input.disabled) {
+        input.value = word;
+        input.disabled = true;
+        input.classList.add('ws-spell-correct');
+      }
+    }
+  }
+
+  _markWordFoundByTyping(word) {
+    // Mark placement as found (pick the first unfound placement for this word)
+    const placement = this.placements.find(p => p.word === word && !p.found);
+    if (placement) {
+      placement.found = true;
+      this._markFoundCells(placement.cells);
+    }
+    this._markWordFound(word);
+    this._updateCounter();
+
+    const foundWords = new Set(this.placements.filter(p => p.found).map(p => p.word));
+    if (foundWords.size >= this.rawWords.length) {
+      setTimeout(() => this.onComplete({ found: foundWords.size }), 400);
+    }
+  }
+
+  getUnfoundWords() {
+    const found = new Set(this.placements.filter(p => p.found).map(p => p.word));
+    return this.rawWords.filter(w => !found.has(w));
+  }
+
+  getFoundWords() {
+    const found = new Set(this.placements.filter(p => p.found).map(p => p.word));
+    return this.rawWords.filter(w => found.has(w));
   }
 
   _cellEl(r, c) {

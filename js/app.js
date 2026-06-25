@@ -299,6 +299,7 @@ function startSession(view, words) {
     wordIndex: 0,
     failedIds: [],
     remedialIndex: 0,
+    remedialPending: null,  // initialized when first entering REMEDIAL
     results: {},   // id → { spelling:'correct'|'hint'|'failed' }
     startedAt: Date.now(),
   };
@@ -331,13 +332,23 @@ function dispatchPhase(view, phase) {
       break;
     }
     case 'REMEDIAL': {
-      if (_session.failedIds.length === 0 || _session.remedialIndex >= _session.failedIds.length) {
+      // Initialize the pending queue on first entry into REMEDIAL
+      if (!_session.remedialPending) {
+        _session.remedialPending = [..._session.failedIds];
+        DB.saveSession(_session);
+      }
+      if (_session.failedIds.length === 0 || _session.remedialPending.length === 0) {
         dispatchPhase(view, 'WORDSEARCH_F');
         return;
       }
-      const id = _session.failedIds[_session.remedialIndex];
+      const id = _session.remedialPending[0];
       const word = getWord(id);
-      if (!word) { _session.remedialIndex++; DB.saveSession(_session); dispatchPhase(view, 'REMEDIAL'); return; }
+      if (!word) {
+        _session.remedialPending.shift();
+        DB.saveSession(_session);
+        dispatchPhase(view, 'REMEDIAL');
+        return;
+      }
       renderSpelling(view, word, true);
       break;
     }
@@ -369,12 +380,25 @@ function advanceSpelling(view) {
 }
 
 function advanceRemedial(view) {
-  _session.remedialIndex++;
+  // Word answered correctly — shift it off the pending queue, then show word search
+  const correctedId = _session.remedialPending.shift();
   DB.saveSession(_session);
-  if (_session.remedialIndex >= _session.failedIds.length) {
-    dispatchPhase(view, 'WORDSEARCH_F');
+
+  const allWords = DB.getWords();
+  const word = allWords.find(w => w.id === correctedId);
+
+  const afterWS = () => {
+    if (_session.remedialPending.length === 0) {
+      dispatchPhase(view, 'WORDSEARCH_F');
+    } else {
+      dispatchPhase(view, 'REMEDIAL');
+    }
+  };
+
+  if (word) {
+    renderWordSearchSingle(view, word, afterWS);
   } else {
-    dispatchPhase(view, 'REMEDIAL');
+    afterWS();
   }
 }
 
@@ -396,8 +420,10 @@ function advanceToNextWord(view) {
 
 function renderSpelling(view, word, isRemedial) {
   const allWords = DB.getWords();
-  const total = isRemedial ? _session.failedIds.length : _session.words.length;
-  const idx   = isRemedial ? _session.remedialIndex    : _session.wordIndex;
+  const failedTotal        = _session.failedIds?.length || 0;
+  const remedialRemaining  = _session.remedialPending?.length || 0;
+  const total = isRemedial ? failedTotal : _session.words.length;
+  const idx   = isRemedial ? (failedTotal - remedialRemaining) : _session.wordIndex;
 
   view.innerHTML = '';
 
@@ -409,7 +435,10 @@ function renderSpelling(view, word, isRemedial) {
   view.appendChild(pWrap);
 
   // Phase label
-  const phase = el('div', 'text-muted', isRemedial ? `補救複習  ${idx+1} / ${total}` : `拼字練習  ${idx+1} / ${total}`);
+  const phaseText = isRemedial
+    ? `補救複習  還有 ${remedialRemaining} 個`
+    : `拼字練習  ${idx+1} / ${total}`;
+  const phase = el('div', 'text-muted', phaseText);
   phase.style.cssText = 'text-align:center;padding:8px 0;font-size:13px';
   view.appendChild(phase);
 
@@ -513,8 +542,14 @@ function renderSpelling(view, word, isRemedial) {
     const nextBtn = el('button', 'btn btn-gray btn-full', '繼續下一個 →');
     nextBtn.style.marginTop = '12px';
     nextBtn.onclick = () => {
-      if (_session.phase === 'REMEDIAL') advanceRemedial(view);
-      else advanceToNextWord(view);
+      if (_session.phase === 'REMEDIAL') {
+        // Move this word to the end of the pending queue (keep cycling until correct)
+        _session.remedialPending.push(_session.remedialPending.shift());
+        DB.saveSession(_session);
+        dispatchPhase(view, 'REMEDIAL');
+      } else {
+        advanceToNextWord(view);
+      }
     };
     view.appendChild(nextBtn);
   };
@@ -530,7 +565,7 @@ function _maskWord(sentence, word) {
 
 // ── Single-Word Word Search ─────────────────────────
 
-function renderWordSearchSingle(view, word) {
+function renderWordSearchSingle(view, word, onCompleteCb) {
   view.innerHTML = '';
 
   const banner = el('div', 'phase-banner');
@@ -552,8 +587,12 @@ function renderWordSearchSingle(view, word) {
     onComplete: () => {
       if (_wsGame) { _wsGame.destroy(); _wsGame = null; }
       DB.updateWord(word.id, { status: 'learning' });
-      showToast('🎉 全部找到！');
-      setTimeout(() => advanceToNextWord(view), 400);
+      showToast('全部找到！');
+      if (onCompleteCb) {
+        setTimeout(() => onCompleteCb(), 400);
+      } else {
+        setTimeout(() => advanceToNextWord(view), 400);
+      }
     },
   });
   _wsGame.render();
@@ -564,15 +603,13 @@ function renderWordSearchSingle(view, word) {
 function renderWordSearchFinal(view, words) {
   view.innerHTML = '';
 
-  const allWords = DB.getWords();
-
   // Banner depends on whether we went through remedial
   const hadFailed = _session.failedIds.length > 0;
   const banner = el('div', 'phase-banner');
   banner.innerHTML = `
     <div class="icon">🏁</div>
     <h2>${hadFailed ? '補救完成，最終挑戰！' : '全部拼對！最終挑戰！'}</h2>
-    <p>在一個大格子裡找出今天所有 ${words.length} 個單字</p>`;
+    <p>在一個大格子裡找出今天所有 ${words.length} 個單字，也可以在下方直接拼出</p>`;
   view.appendChild(banner);
 
   const container = el('div');
@@ -592,6 +629,58 @@ function renderWordSearchFinal(view, words) {
     },
   });
   _wsGame.render();
+
+  // Give-up button
+  const btnGiveup = el('button', 'btn btn-danger ws-giveup-btn', '放棄');
+  btnGiveup.onclick = () => openGiveUpConfirm(view);
+  view.appendChild(btnGiveup);
+}
+
+function openGiveUpConfirm(view) {
+  const overlay = el('div', 'modal-overlay confirm-overlay');
+  const dialog  = el('div', 'confirm-dialog');
+  dialog.innerHTML = `
+    <h3>確定要放棄嗎？</h3>
+    <p>尚未找到或拼出的單字將被標為「未熟」，下次練習時重新學習。</p>`;
+
+  const row = el('div', 'confirm-btn-row');
+  const btnNo  = el('button', 'btn btn-ghost', '取消');
+  const btnYes = el('button', 'btn btn-danger', '確定放棄');
+
+  btnNo.onclick = () => document.body.removeChild(overlay);
+
+  btnYes.onclick = () => {
+    document.body.removeChild(overlay);
+    // Mark unfound/unspelled words as 未熟, reset SRS
+    if (_wsGame) {
+      const unfound = _wsGame.getUnfoundWords();
+      const allWords = DB.getWords();
+      unfound.forEach(wordStr => {
+        const wordObj = allWords.find(w => w.word.toUpperCase() === wordStr);
+        if (wordObj) {
+          DB.updateWord(wordObj.id, {
+            status: 'new',
+            reviewCount: 0,
+            nextReviewDate: null,
+            lastReviewedAt: today(),
+          });
+          if (_session) {
+            const prev = _session.results[wordObj.id] || {};
+            _session.results[wordObj.id] = { ...prev, spelling: prev.spelling || 'failed', giveUp: true };
+          }
+        }
+      });
+      if (_session) DB.saveSession(_session);
+      _wsGame.destroy();
+      _wsGame = null;
+    }
+    finishSession(view);
+  };
+
+  row.append(btnNo, btnYes);
+  dialog.appendChild(row);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
 }
 
 // ── Session Completion ──────────────────────────────
@@ -820,6 +909,7 @@ function renderReviewDone(view) {
 // ══════════════════════════════════════════════════════════
 
 let _vocabFilter = 'all';
+let _vocabGroup  = 'none'; // 'none' | 'day' | 'week' | 'month'
 let _vocabSearch = '';
 
 function renderVocab(app) {
@@ -840,19 +930,35 @@ function renderVocab(app) {
   toolbar.appendChild(search);
   view.appendChild(toolbar);
 
-  // Filter chips
+  // Filter chips (status)
   const filterRow = el('div', 'vocab-filter-row');
   [['all','全部'],['new','未熟'],['learning','學習中'],['mastered','精熟']].forEach(([k, label]) => {
     const chip = el('button', `filter-chip${_vocabFilter === k ? ' active' : ''}`, label);
     chip.onclick = () => {
       _vocabFilter = k;
-      view.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      filterRow.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       renderWordList(listContainer);
     };
     filterRow.appendChild(chip);
   });
   view.appendChild(filterRow);
+
+  // Group chips (time grouping)
+  const groupRow = el('div', 'vocab-filter-row vocab-group-row');
+  const groupLabel = el('span', 'group-row-label', '分組：');
+  groupRow.appendChild(groupLabel);
+  [['none','不分組'],['day','分天'],['week','分週'],['month','分月']].forEach(([k, label]) => {
+    const chip = el('button', `filter-chip${_vocabGroup === k ? ' active' : ''}`, label);
+    chip.onclick = () => {
+      _vocabGroup = k;
+      groupRow.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      renderWordList(listContainer);
+    };
+    groupRow.appendChild(chip);
+  });
+  view.appendChild(groupRow);
 
   // Word list
   const listContainer = el('div', 'word-list-container');
@@ -884,63 +990,112 @@ function renderWordList(container) {
     return;
   }
 
-  filtered.forEach(word => {
-    const card = el('div', 'word-card');
-    card.innerHTML = `
-      <div class="word-card-header">
-        <span class="word-card-en">${word.word}</span>
-        <span class="badge badge-${word.pos}">${POS_LABELS[word.pos] || word.pos}</span>
-        <span class="badge badge-${word.status}">${STATUS_LABELS[word.status]}</span>
-      </div>
-      <div class="word-card-zh">${word.meaning}</div>
-      ${word.example ? `<div class="word-card-example">${word.example}</div>` : ''}`;
+  if (_vocabGroup === 'none') {
+    filtered.forEach(word => renderWordCard(container, word));
+  } else {
+    // Group words by day / week / month
+    const groupMap = new Map();
+    filtered.forEach(w => {
+      const key   = _groupKey(w.addedAt);
+      const label = _groupLabel(w.addedAt);
+      if (!groupMap.has(key)) groupMap.set(key, { label, words: [] });
+      groupMap.get(key).words.push(w);
+    });
+    // Sort groups newest-first
+    [...groupMap.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .forEach(([, group]) => {
+        const hdr = el('div', 'vocab-group-header');
+        hdr.innerHTML = `<span class="vocab-group-label">${group.label}</span><span class="vocab-group-count">${group.words.length} 個</span>`;
+        container.appendChild(hdr);
+        group.words.forEach(word => renderWordCard(container, word));
+      });
+  }
+}
 
-    if (word.example) {
-      card.onclick = () => card.classList.toggle('expanded');
+function _groupKey(dateStr) {
+  if (!dateStr) return 'unknown';
+  if (_vocabGroup === 'day') return dateStr;
+  if (_vocabGroup === 'week') {
+    const d = new Date(dateStr + 'T00:00:00');
+    const year = d.getFullYear();
+    const jan1 = new Date(year, 0, 1);
+    const week = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+    return `${year}-W${String(week).padStart(2, '0')}`;
+  }
+  if (_vocabGroup === 'month') return dateStr.slice(0, 7);
+  return 'unknown';
+}
+
+function _groupLabel(dateStr) {
+  if (!dateStr) return '未知日期';
+  if (_vocabGroup === 'day') return formatDateFull(dateStr);
+  if (_vocabGroup === 'week') {
+    const d = new Date(dateStr + 'T00:00:00');
+    const year = d.getFullYear();
+    const jan1 = new Date(year, 0, 1);
+    const week = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+    return `${year} 年  第 ${week} 週`;
+  }
+  if (_vocabGroup === 'month') {
+    const [y, m] = dateStr.slice(0, 7).split('-');
+    return `${y} 年 ${parseInt(m)} 月`;
+  }
+  return dateStr;
+}
+
+function renderWordCard(container, word) {
+  const card = el('div', 'word-card');
+  card.innerHTML = `
+    <div class="word-card-header">
+      <span class="word-card-en">${word.word}</span>
+      <span class="badge badge-${word.pos}">${POS_LABELS[word.pos] || word.pos}</span>
+      <span class="badge badge-${word.status}">${STATUS_LABELS[word.status]}</span>
+    </div>
+    <div class="word-card-zh">${word.meaning}</div>
+    ${word.example ? `<div class="word-card-example">${word.example}</div>` : ''}`;
+
+  const actRow = el('div', 'word-card-actions');
+  actRow.style.display = 'none';
+
+  const btnEdit = el('button', 'btn btn-ghost', '編輯');
+  btnEdit.style.cssText = 'padding:6px 12px;font-size:13px';
+  btnEdit.onclick = e => { e.stopPropagation(); openEditWordModal(word, () => renderWordList(container)); };
+
+  const btnDel = el('button', 'btn btn-danger', '刪除');
+  btnDel.style.cssText = 'padding:6px 12px;font-size:13px';
+  btnDel.onclick = e => {
+    e.stopPropagation();
+    if (confirm(`確定要刪除「${word.word}」嗎？`)) {
+      DB.deleteWord(word.id);
+      renderWordList(container);
+      showToast('已刪除');
     }
+  };
 
-    // Actions row (shown on expand)
-    if (word.example || true) {
-      const actRow = el('div', 'word-card-actions');
-      actRow.style.display = 'none';
+  const nextStatus = { new:'learning', learning:'mastered', mastered:'new' };
+  const statusBtn = el('button', 'btn btn-gray', `→ ${STATUS_LABELS[nextStatus[word.status]]}`);
+  statusBtn.style.cssText = 'padding:6px 12px;font-size:13px;margin-left:auto';
+  statusBtn.onclick = e => {
+    e.stopPropagation();
+    DB.updateWord(word.id, { status: nextStatus[word.status] });
+    renderWordList(container);
+  };
 
-      const btnEdit = el('button', 'btn btn-ghost', '編輯');
-      btnEdit.style.cssText = 'padding:6px 12px;font-size:13px';
-      btnEdit.onclick = e => { e.stopPropagation(); openEditWordModal(word, () => renderWordList(container)); };
+  actRow.append(btnEdit, btnDel, statusBtn);
+  card.appendChild(actRow);
 
-      const btnDel = el('button', 'btn btn-danger', '刪除');
-      btnDel.style.cssText = 'padding:6px 12px;font-size:13px';
-      btnDel.onclick = e => {
-        e.stopPropagation();
-        if (confirm(`確定要刪除「${word.word}」嗎？`)) {
-          DB.deleteWord(word.id);
-          renderWordList(container);
-          showToast('已刪除');
-        }
-      };
+  card.onclick = () => {
+    const was = card.classList.contains('expanded');
+    document.querySelectorAll('.word-card').forEach(c => {
+      c.classList.remove('expanded');
+      const ar = c.querySelector('.word-card-actions');
+      if (ar) ar.style.display = 'none';
+    });
+    if (!was) { card.classList.add('expanded'); actRow.style.display = 'flex'; }
+  };
 
-      // Status cycle button
-      const nextStatus = { new:'learning', learning:'mastered', mastered:'new' };
-      const statusBtn = el('button', 'btn btn-gray', `→ ${STATUS_LABELS[nextStatus[word.status]]}`);
-      statusBtn.style.cssText = 'padding:6px 12px;font-size:13px;margin-left:auto';
-      statusBtn.onclick = e => {
-        e.stopPropagation();
-        DB.updateWord(word.id, { status: nextStatus[word.status] });
-        renderWordList(container);
-      };
-
-      actRow.append(btnEdit, btnDel, statusBtn);
-      card.appendChild(actRow);
-
-      card.onclick = () => {
-        const was = card.classList.contains('expanded');
-        document.querySelectorAll('.word-card').forEach(c => { c.classList.remove('expanded'); c.querySelector('.word-card-actions').style.display = 'none'; });
-        if (!was) { card.classList.add('expanded'); actRow.style.display = 'flex'; }
-      };
-    }
-
-    container.appendChild(card);
-  });
+  container.appendChild(card);
 }
 
 function openAddWordModal(listContainer, prefill) {
