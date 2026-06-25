@@ -1,0 +1,30 @@
+{
+  "name": "多益 680 練功表",
+  "short_name": "多益練功",
+  "description": "新多益 680 分備考單字學習系統",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#EFF6FF",
+  "theme_color": "#2563EB",
+  "orientation": "portrait-primary",
+  "lang": "zh-TW",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icons/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
