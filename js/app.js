@@ -235,6 +235,8 @@ function renderLearningIdle(view) {
 
   const hasNew = todayWords.length > 0;
   const hasDue = dueWords.length > 0;
+  const todayActivity = DB.getActivity()[today()] || {};
+  const completedToday = (todayActivity.new || 0) > 0;
 
   // 今日新單字 卡片
   const newCard = el('div', 'card learn-section-card');
@@ -242,7 +244,11 @@ function renderLearningIdle(view) {
   const newDesc = el('div', 'learn-section-count');
 
   if (hasNew) {
-    newDesc.textContent = `${todayWords.length} 個單字等待學習`;
+    if (completedToday) {
+      newDesc.innerHTML = `<span class="done-badge">今日已完成</span> 共 ${todayWords.length} 個單字`;
+    } else {
+      newDesc.textContent = `${todayWords.length} 個單字等待學習`;
+    }
     const btnNew = el('button', 'btn btn-primary', '開始學習');
     btnNew.onclick = () => startSession(view, todayWords);
 
@@ -854,9 +860,6 @@ function renderReviewSpelling(view) {
     hintDisp.style.color = 'var(--warning)';
     _reviewSession.results[id] = 'failed';
     DB.addLog({ date: today(), wordId: id, type: 'spelling', result: 'failed' });
-    const reveal = el('div', 'reveal-word');
-    reveal.innerHTML = `<div class="revealed">${word.word}</div>`;
-    view.appendChild(reveal);
     const nextBtn = el('button', 'btn btn-gray btn-full', '下一個');
     nextBtn.style.marginTop = '12px';
     nextBtn.onclick = advance;

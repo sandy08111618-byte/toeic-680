@@ -297,6 +297,20 @@ h3 { font-size: 14px; font-weight: 800; }
 .badge-new      { background: #FDECEA; color: #8B1C1C; border-color: #F0B8B8; }
 .badge-learning { background: #FFF2E4; color: #7A4A1F; border-color: #F5D4A8; }
 .badge-mastered { background: var(--green-pale); color: #2F6B49; border-color: #9ECDB5; }
+
+/* Completion badge in learning idle screen */
+.done-badge {
+  display: inline-block;
+  background: var(--green-pale);
+  color: var(--green);
+  border: 1.5px solid var(--green);
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 2px 10px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
 .badge-noun     { background: #F4EFF9; color: #6E4A95; border-color: #D8C9EC; }
 .badge-verb     { background: var(--blue-pale); color: #3D7096; border-color: #A8CEDE; }
 .badge-adj      { background: #FDECEA; color: #8B1C1C; border-color: #F0B8B8; }
