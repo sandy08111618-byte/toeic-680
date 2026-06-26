@@ -540,6 +540,20 @@ function renderSpelling(view, word, isRemedial) {
   actions.append(btnCheck, btnHint, btnGiveup);
   view.appendChild(actions);
 
+  // Slot where "繼續下一個" appears dynamically (must come BEFORE the quit button)
+  const nextBtnSlot = el('div');
+  view.appendChild(nextBtnSlot);
+
+  // Remedial-only: quit button anchored at very bottom with a large gap
+  if (isRemedial) {
+    const quitGap = el('div');
+    quitGap.style.height = '48px';
+    view.appendChild(quitGap);
+    const btnQuitRemedial = el('button', 'btn btn-full remedial-quit-btn', '放棄補救，明天再來');
+    btnQuitRemedial.onclick = () => openRemedialGiveUpConfirm(view);
+    view.appendChild(btnQuitRemedial);
+  }
+
   // State
   let hintShown = false;
   let answered  = false;
@@ -616,15 +630,9 @@ function renderSpelling(view, word, isRemedial) {
         advanceToNextWord(view);
       }
     };
-    view.appendChild(nextBtn);
+    // Insert into the reserved slot so it always sits above the quit button
+    nextBtnSlot.appendChild(nextBtn);
   };
-
-  // Remedial-only: give-up button to exit entire remedial phase
-  if (isRemedial) {
-    const btnQuitRemedial = el('button', 'btn btn-full remedial-quit-btn', '放棄補救，明天再來');
-    btnQuitRemedial.onclick = () => openRemedialGiveUpConfirm(view);
-    view.appendChild(btnQuitRemedial);
-  }
 
   // Focus after short delay (avoid keyboard flicker on phase transition)
   setTimeout(() => { try { input.focus(); } catch(_) {} }, 180);
