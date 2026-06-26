@@ -300,6 +300,58 @@ function renderLearningIdle(view) {
     dueCard.append(dueTitle, dueDesc, note);
   }
   view.appendChild(dueCard);
+
+  // ── 我要複習 卡片（未熟 + 最近新增）──────────────────
+  const manualWords = getManualReviewWords();
+  if (manualWords.length > 0) {
+    const allWds = DB.getWords();
+    const newCount = allWds.filter(w => w.status === 'new').length;
+    const dates = [...new Set(allWds.map(w => w.addedAt).filter(Boolean))].sort().reverse();
+    const lastDate = dates[0];
+    // Count how many from last batch aren't already counted as 未熟
+    const lastBatchExtra = lastDate
+      ? allWds.filter(w => w.addedAt === lastDate && w.status !== 'new').length
+      : 0;
+
+    const manualCard = el('div', 'card learn-section-card');
+    const manualTitle = el('div', 'learn-section-title', '我要複習');
+    const manualDesc = el('div', 'learn-section-count');
+    let descParts = [];
+    if (newCount > 0) descParts.push(`未熟 ${newCount} 個`);
+    if (lastDate && lastBatchExtra > 0) descParts.push(`${formatDateShort(lastDate)} 新增 ${lastBatchExtra} 個`);
+    manualDesc.innerHTML = `共 <strong>${manualWords.length}</strong> 個單字`;
+    if (descParts.length > 0) {
+      const sub = el('div', 'text-muted');
+      sub.style.fontSize = '12px';
+      sub.style.marginTop = '2px';
+      sub.textContent = descParts.join('、');
+      manualCard.append(manualTitle, manualDesc, sub);
+    } else {
+      manualCard.append(manualTitle, manualDesc);
+    }
+    const btnManual = el('button', 'btn btn-primary', '我要複習');
+    btnManual.onclick = () => startReviewSession(view, manualWords);
+    manualCard.appendChild(btnManual);
+    view.appendChild(manualCard);
+  }
+}
+
+// 組合「未熟」+「最近一次新增批次」的複習單字池（去重）
+function getManualReviewWords() {
+  const words = DB.getWords();
+  // 1. 未熟 (status === 'new')
+  const newWords = words.filter(w => w.status === 'new');
+  // 2. 最近一次 addedAt 的單字
+  const dates = [...new Set(words.map(w => w.addedAt).filter(Boolean))].sort().reverse();
+  const lastDate = dates[0];
+  const lastBatch = lastDate ? words.filter(w => w.addedAt === lastDate) : [];
+  // 3. 合併去重
+  const seen = new Set();
+  const combined = [];
+  [...newWords, ...lastBatch].forEach(w => {
+    if (!seen.has(w.id)) { seen.add(w.id); combined.push(w); }
+  });
+  return combined;
 }
 
 function startSession(view, words) {
