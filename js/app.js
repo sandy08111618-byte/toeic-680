@@ -770,7 +770,7 @@ function openGiveUpConfirm(view) {
   const dialog  = el('div', 'confirm-dialog');
   dialog.innerHTML = `
     <h3>確定要放棄嗎？</h3>
-    <p>尚未找到或拼出的單字將被標為「未熟」，下次練習時重新學習。</p>`;
+    <p>尚未找到或拼出的單字將被標為「未熟」，並排到<strong>明天的今日單字</strong>重新練習。</p>`;
 
   const row = el('div', 'confirm-btn-row');
   const btnNo  = el('button', 'btn btn-ghost', '取消');
@@ -788,7 +788,8 @@ function openGiveUpConfirm(view) {
         const wordObj = allWords.find(w => w.word.toUpperCase() === wordStr);
         if (wordObj) {
           DB.updateWord(wordObj.id, {
-            status: 'new',
+            addedAt:     tomorrow(),
+            status:      'new',
             reviewCount: 0,
             nextReviewDate: null,
             lastReviewedAt: today(),
