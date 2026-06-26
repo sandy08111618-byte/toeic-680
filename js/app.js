@@ -2140,6 +2140,16 @@ function init() {
         FirebaseSync.syncToCloud();
       }
     })();
+
+    // 頁面隱藏或關閉時立即上傳，防止資料遺失
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        FirebaseSync.syncToCloud();
+      }
+    });
+    window.addEventListener('pagehide', () => {
+      FirebaseSync.syncToCloud();
+    });
   }
 }
 
