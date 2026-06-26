@@ -497,7 +497,9 @@ function renderSpelling(view, word, isRemedial) {
       input.classList.add('correct');
       input.value = word.word;
       btnCheck.disabled = btnHint.disabled = btnGiveup.disabled = true;
-      _session.results[word.id] = { spelling: 'correct' };
+      // Preserve hintUsed flag if the hint button was clicked before answering
+      const prevResult = _session.results[word.id] || {};
+      _session.results[word.id] = { ...prevResult, spelling: 'correct' };
       DB.updateWord(word.id, { status: word.status === 'new' ? 'learning' : word.status, lastReviewedAt: today() });
       DB.addLog({ date: today(), wordId: word.id, type: 'spelling', result: 'correct' });
       DB.saveSession(_session);
@@ -525,7 +527,7 @@ function renderSpelling(view, word, isRemedial) {
     input.placeholder = `${prefix}${'_'.repeat(word.word.length - 2)}`;
     input.focus();
     btnHint.disabled = true;
-    _session.results[word.id] = { spelling: 'hint' };
+    _session.results[word.id] = { spelling: 'hint', hintUsed: true };
     DB.saveSession(_session);
   };
 
@@ -718,10 +720,13 @@ function renderDone(view) {
   const failed  = sessionWords.filter(w => _session.results[w.id]?.spelling === 'failed').length;
   const pct = total ? Math.round((correct / total) * 100) : 0;
 
-  // 記錄 SRS 複習狀態（完成 word search 表示已確實學習）
+  // 記錄 SRS：只有「第一次就拼對、沒按提示、沒進補救」才算真正學會
   _session.words.forEach(id => {
     const r = _session.results[id];
-    DB.recordReview(id, r?.spelling === 'correct'); // 拼對才算成功
+    const trueSuccess = r?.spelling === 'correct'
+      && !r?.hintUsed                          // 沒有按過提示
+      && !_session.failedIds.includes(id);     // 沒有進過補救階段
+    DB.recordReview(id, trueSuccess);
   });
   DB.logActivity('new');
   DB.clearSession();
