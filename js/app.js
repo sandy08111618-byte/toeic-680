@@ -416,7 +416,11 @@ function dispatchPhase(view, phase) {
       break;
     }
     case 'WORDSEARCH_F': {
-      const wordObjs = _session.words.map(getWord).filter(Boolean);
+      const givenUpIds = new Set(_session.remedialGivenUpIds || []);
+      const wordObjs = _session.words
+        .filter(id => !givenUpIds.has(id))
+        .map(getWord)
+        .filter(Boolean);
       renderWordSearchFinal(view, wordObjs);
       break;
     }
@@ -665,6 +669,8 @@ function openRemedialGiveUpConfirm(view) {
       });
     });
     _session.remedialPending = [];
+    // Remember which IDs were given up so WORDSEARCH_F can exclude them
+    _session.remedialGivenUpIds = [...pending];
     DB.saveSession(_session);
     showToast(`${pending.length} 個單字已排到明天`);
     // Proceed to final word search with whatever was already completed
@@ -735,7 +741,11 @@ function renderWordSearchFinal(view, words) {
   view.appendChild(container);
 
   const wsLabels = {};
-  words.forEach(w => { wsLabels[w.word.toUpperCase()] = w.meaning; });
+  // Include POS so duplicate meanings (same Chinese, different POS) are distinguishable
+  words.forEach(w => {
+    const posTag = POS_LABELS[w.pos] || w.pos;
+    wsLabels[w.word.toUpperCase()] = `${w.meaning}（${posTag}）`;
+  });
 
   _wsGame = new WordSearchGame({
     container,
