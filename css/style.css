@@ -788,6 +788,39 @@ textarea.form-input { resize: vertical; min-height: 72px; }
   cursor: default;
 }
 
+/* Remedial phase quit button */
+.remedial-quit-btn {
+  margin-top: 24px;
+  background: transparent;
+  color: var(--red);
+  border: var(--bdr-sm);
+  border-color: var(--red);
+  border-radius: var(--radius);
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.7;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s;
+}
+.remedial-quit-btn:active { opacity: 1; }
+
+/* Random practice button in vocab toolbar */
+.rand-btn {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* Random practice top row (exit button) */
+.rand-top-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
 /* Give-up button */
 .ws-giveup-btn {
   display: block;

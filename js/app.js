@@ -10,8 +10,13 @@ const STATUS_LABELS = { new:'未熟', learning:'學習中', mastered:'精熟' };
 const SRS_INTERVALS = [1, 3, 7, 14, 30];
 
 // ── Utilities ──────────────────────────────────────
-function genId() { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7); }
-function today()  { return new Date().toISOString().slice(0, 10); }
+function genId()    { return 'id_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7); }
+function today()    { return new Date().toISOString().slice(0, 10); }
+function tomorrow() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 function formatDateShort(d) {
   const dt = new Date(d + 'T00:00:00');
@@ -562,8 +567,54 @@ function renderSpelling(view, word, isRemedial) {
     view.appendChild(nextBtn);
   };
 
+  // Remedial-only: give-up button to exit entire remedial phase
+  if (isRemedial) {
+    const btnQuitRemedial = el('button', 'btn btn-full remedial-quit-btn', '放棄補救，明天再來');
+    btnQuitRemedial.onclick = () => openRemedialGiveUpConfirm(view);
+    view.appendChild(btnQuitRemedial);
+  }
+
   // Focus after short delay (avoid keyboard flicker on phase transition)
   setTimeout(() => { try { input.focus(); } catch(_) {} }, 180);
+}
+
+function openRemedialGiveUpConfirm(view) {
+  const pending = _session.remedialPending || [];
+  const overlay = el('div', 'modal-overlay confirm-overlay');
+  const dialog  = el('div', 'confirm-dialog');
+  dialog.innerHTML = `
+    <h3>放棄補救？</h3>
+    <p>剩下 <strong>${pending.length}</strong> 個單字將在<strong>明天</strong>重新出現在「今日新單字」，讓你從頭練習一次。</p>`;
+
+  const row = el('div', 'confirm-btn-row');
+  const btnNo  = el('button', 'btn btn-ghost', '繼續補救');
+  const btnYes = el('button', 'btn btn-danger', '確定放棄');
+
+  btnNo.onclick = () => document.body.removeChild(overlay);
+
+  btnYes.onclick = () => {
+    document.body.removeChild(overlay);
+    // Move all pending remedial words to tomorrow's 今日新單字
+    const tmr = tomorrow();
+    pending.forEach(id => {
+      DB.updateWord(id, {
+        addedAt:        tmr,
+        status:         'new',
+        reviewCount:    0,
+        nextReviewDate: null,
+      });
+    });
+    _session.remedialPending = [];
+    DB.saveSession(_session);
+    showToast(`${pending.length} 個單字已排到明天`);
+    // Proceed to final word search with whatever was already completed
+    dispatchPhase(view, 'WORDSEARCH_F');
+  };
+
+  row.append(btnNo, btnYes);
+  dialog.appendChild(row);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
 }
 
 function _maskWord(sentence, word) {
@@ -913,6 +964,194 @@ function renderReviewDone(view) {
 }
 
 // ══════════════════════════════════════════════════════════
+//  RANDOM PRACTICE SESSION
+//  從單字庫隨機抽 3 個單字練習，根據結果更新熟悉度
+// ══════════════════════════════════════════════════════════
+
+let _randSession = null;
+
+function startRandomPractice() {
+  const words = DB.getWords();
+  if (words.length === 0) { showToast('單字庫是空的！'); return; }
+
+  // Shuffle and pick up to 3 words; bias toward 未熟/學習中
+  const pool = [...words].sort(() => Math.random() - 0.5);
+  const picked = pool.slice(0, Math.min(3, pool.length));
+
+  _randSession = {
+    words:      picked.map(w => w.id),
+    currentIdx: 0,
+    results:    {}, // id → { spelling: 'correct'|'failed', hintUsed: bool }
+  };
+
+  if (_wsGame) { _wsGame.destroy(); _wsGame = null; }
+  const app = _app();
+  app.innerHTML = '';
+  const view = el('div', 'view');
+  app.appendChild(view);
+  renderRandSpelling(view);
+}
+
+function renderRandSpelling(view) {
+  if (!_randSession || _randSession.currentIdx >= _randSession.words.length) {
+    renderRandDone(view);
+    return;
+  }
+
+  const allWords = DB.getWords();
+  const id   = _randSession.words[_randSession.currentIdx];
+  const word = allWords.find(w => w.id === id);
+  if (!word) { _randSession.currentIdx++; renderRandSpelling(view); return; }
+
+  const total = _randSession.words.length;
+  const idx   = _randSession.currentIdx;
+
+  view.innerHTML = '';
+
+  // Exit button
+  const topRow = el('div', 'rand-top-row');
+  const btnExit = el('button', 'btn btn-ghost', '← 離開');
+  btnExit.onclick = () => { _randSession = null; showTab('vocab'); };
+  topRow.appendChild(btnExit);
+  view.appendChild(topRow);
+
+  // Progress
+  const pWrap = el('div', 'progress-bar-wrap');
+  const pFill = el('div', 'progress-bar-fill');
+  pFill.style.width = `${(idx / total) * 100}%`;
+  pWrap.appendChild(pFill);
+  view.appendChild(pWrap);
+
+  const phaseLabel = el('div', 'text-muted', `隨機練習  ${idx + 1} / ${total}`);
+  phaseLabel.style.cssText = 'text-align:center;padding:8px 0;font-size:13px';
+  view.appendChild(phaseLabel);
+
+  const prompt = el('div', 'word-prompt');
+  prompt.innerHTML = `
+    <div class="pos-label">${POS_LABELS[word.pos] || word.pos}</div>
+    <div class="meaning">${word.meaning}</div>
+    ${word.example ? `<div class="example">${_maskWord(word.example, word.word)}</div>` : ''}`;
+  view.appendChild(prompt);
+
+  const hintDisp = el('div', 'hint-display');
+  hintDisp.style.display = 'none';
+  view.appendChild(hintDisp);
+
+  const inputWrap = el('div', 'spelling-input-wrap');
+  const input = el('input', 'spelling-input');
+  input.type = 'text';
+  input.autocomplete = 'off';
+  input.autocorrect = 'off';
+  input.autocapitalize = 'none';
+  input.spellcheck = false;
+  input.placeholder = '拼出英文單字…';
+  inputWrap.appendChild(input);
+  view.appendChild(inputWrap);
+
+  const actions = el('div', 'spelling-actions');
+  const btnCheck  = el('button', 'btn btn-primary', '確認');
+  const btnHint   = el('button', 'btn btn-ghost',   '提示 (前2字)');
+  const btnGiveup = el('button', 'btn btn-gray',    '看答案');
+  btnGiveup.style.gridColumn = '1 / -1';
+  actions.append(btnCheck, btnHint, btnGiveup);
+  view.appendChild(actions);
+
+  let hintUsed = false;
+  let answered = false;
+
+  const advance = () => { _randSession.currentIdx++; renderRandSpelling(view); };
+
+  const doCheck = () => {
+    if (answered) return;
+    const val = input.value.trim().toLowerCase();
+    if (!val) return;
+    if (val === word.word.toLowerCase()) {
+      answered = true;
+      input.classList.add('correct');
+      input.value = word.word;
+      btnCheck.disabled = btnHint.disabled = btnGiveup.disabled = true;
+      _randSession.results[id] = { spelling: 'correct', hintUsed };
+      showToast('答對了');
+      setTimeout(advance, 900);
+    } else {
+      input.classList.add('wrong');
+      setTimeout(() => input.classList.remove('wrong'), 400);
+    }
+  };
+
+  btnCheck.onclick = doCheck;
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') doCheck(); });
+
+  btnHint.onclick = () => {
+    if (answered) return;
+    hintUsed = true;
+    const prefix = word.word.slice(0, 2);
+    const blanks  = '_'.repeat(word.word.length - 2);
+    hintDisp.textContent = prefix + blanks;
+    hintDisp.style.display = '';
+    input.placeholder = `${prefix}${'_'.repeat(word.word.length - 2)}`;
+    input.focus();
+    btnHint.disabled = true;
+  };
+
+  btnGiveup.onclick = () => {
+    if (answered) return;
+    answered = true;
+    btnCheck.disabled = btnHint.disabled = btnGiveup.disabled = true;
+    hintDisp.textContent = word.word;
+    hintDisp.style.display = '';
+    hintDisp.style.background = 'var(--warning-pale)';
+    hintDisp.style.color = 'var(--warning)';
+    _randSession.results[id] = { spelling: 'failed', hintUsed };
+    const nextBtn = el('button', 'btn btn-gray btn-full', '下一個');
+    nextBtn.style.marginTop = '12px';
+    nextBtn.onclick = advance;
+    view.appendChild(nextBtn);
+  };
+
+  setTimeout(() => { try { input.focus(); } catch(_) {} }, 180);
+}
+
+function renderRandDone(view) {
+  const results = _randSession?.results || {};
+  const wordIds = _randSession?.words || [];
+
+  // Update SRS: correct with no hint = true success
+  wordIds.forEach(id => {
+    const r = results[id];
+    const trueSuccess = r?.spelling === 'correct' && !r?.hintUsed;
+    DB.recordReview(id, trueSuccess);
+  });
+
+  const total   = wordIds.length;
+  const correct = wordIds.filter(id => results[id]?.spelling === 'correct' && !results[id]?.hintUsed).length;
+  _randSession = null;
+
+  view.innerHTML = '';
+  const done = el('div', 'done-screen');
+  done.innerHTML = `
+    <div class="done-label">${correct === total ? '全對！' : '練習完成'}</div>
+    <h2>隨機練習結束</h2>
+    <p class="subtitle">熟悉度已根據結果更新</p>
+    <div class="done-stats">
+      <div class="done-stat-item"><div class="stat-val">${total}</div><div class="stat-key">練習單字</div></div>
+      <div class="done-stat-item"><div class="stat-val">${correct}</div><div class="stat-key">完全答對</div></div>
+      <div class="done-stat-item"><div class="stat-val">${total - correct}</div><div class="stat-key">需加強</div></div>
+    </div>`;
+
+  const btnAgain = el('button', 'btn btn-primary btn-full', '再抽3個練習');
+  btnAgain.onclick = () => startRandomPractice();
+  done.appendChild(btnAgain);
+
+  const btnBack = el('button', 'btn btn-ghost btn-full', '回到單字庫');
+  btnBack.style.marginTop = '8px';
+  btnBack.onclick = () => showTab('vocab');
+  done.appendChild(btnBack);
+
+  view.appendChild(done);
+}
+
+// ══════════════════════════════════════════════════════════
 //  VOCABULARY VIEW
 // ══════════════════════════════════════════════════════════
 
@@ -928,7 +1167,7 @@ function renderVocab(app) {
   header.innerHTML = '<h1>單字庫</h1>';
   view.appendChild(header);
 
-  // Search + Add button row
+  // Search + Random practice button
   const toolbar = el('div', 'vocab-toolbar');
   const search = el('input', 'vocab-search');
   search.type = 'text';
@@ -936,6 +1175,11 @@ function renderVocab(app) {
   search.value = _vocabSearch;
   search.oninput = () => { _vocabSearch = search.value; renderWordList(listContainer); };
   toolbar.appendChild(search);
+
+  const btnRand = el('button', 'btn btn-primary rand-btn', '隨機練習');
+  btnRand.onclick = () => startRandomPractice();
+  toolbar.appendChild(btnRand);
+
   view.appendChild(toolbar);
 
   // Filter chips (status)
