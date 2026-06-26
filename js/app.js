@@ -575,7 +575,7 @@ function renderSpelling(view, word, isRemedial) {
       DB.addLog({ date: today(), wordId: word.id, type: 'spelling', result: 'correct' });
       DB.saveSession(_session);
       showToast('✅ 答對了！');
-      setTimeout(() => advanceSpelling(view), 900);
+      setTimeout(() => { if (view.isConnected) advanceSpelling(view); }, 900);
     } else {
       input.classList.add('wrong');
       setTimeout(() => input.classList.remove('wrong'), 400);
@@ -708,9 +708,9 @@ function renderWordSearchSingle(view, word, onCompleteCb) {
       DB.updateWord(word.id, { status: 'learning' });
       showToast('全部找到！');
       if (onCompleteCb) {
-        setTimeout(() => onCompleteCb(), 400);
+        setTimeout(() => { if (view.isConnected) onCompleteCb(); }, 400);
       } else {
-        setTimeout(() => advanceToNextWord(view), 400);
+        setTimeout(() => { if (view.isConnected) advanceToNextWord(view); }, 400);
       }
     },
   });
@@ -744,7 +744,7 @@ function renderWordSearchFinal(view, words) {
     mode: 'combined',
     onComplete: () => {
       if (_wsGame) { _wsGame.destroy(); _wsGame = null; }
-      finishSession(view);
+      if (view.isConnected) finishSession(view);
     },
   });
   _wsGame.render();
@@ -956,7 +956,7 @@ function renderReviewSpelling(view) {
       _reviewSession.results[id] = 'correct';
       DB.addLog({ date: today(), wordId: id, type: 'spelling', result: 'correct' });
       showToast('答對了');
-      setTimeout(advance, 900);
+      setTimeout(() => { if (view.isConnected) advance(); }, 900);
     } else {
       input.classList.add('wrong');
       setTimeout(() => input.classList.remove('wrong'), 400);
@@ -1132,7 +1132,7 @@ function renderRandSpelling(view) {
       btnCheck.disabled = btnHint.disabled = btnGiveup.disabled = true;
       _randSession.results[id] = { spelling: 'correct', hintUsed };
       showToast('答對了');
-      setTimeout(advance, 900);
+      setTimeout(() => { if (view.isConnected) advance(); }, 900);
     } else {
       input.classList.add('wrong');
       setTimeout(() => input.classList.remove('wrong'), 400);
